@@ -314,7 +314,8 @@ def main(hparams={}):
     prompts = [{"prompt": x["prompt"], "original_output": x["chosen"]} for x in dataset["train"]]
     eval_prompts = [{"prompt": x["prompt"], "original_output": x["chosen"]} for x in islice(dataset["test"], 35)]
 
-    # Change reward model to be 
+
+    # Change reward model to be facebook/roberta-hate-speech-dynabench-r4-target
     reward_fn = create_reward_fn()
 
     trainer, eval_stats = trlx.train(
