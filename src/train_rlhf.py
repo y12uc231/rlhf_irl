@@ -8,12 +8,13 @@ from itertools import islice
 
 import numpy as np
 import torch
-import tritonclient.grpc as client_util
+# import tritonclient.grpc as client_util
 from datasets import load_dataset
 from huggingface_hub import snapshot_download
 from torch import nn
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModelForSequenceClassification
-from tritonclient.utils import np_to_triton_dtype
+from transformers import AutoModelForCausalLM, AutoTokenizer
+# from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModelForSequenceClassification
+# from tritonclient.utils import np_to_triton_dtype
 
 
 import trlx
@@ -27,9 +28,9 @@ from trlx.data.default_configs import (
     TRLConfig,
 )
 
-import wandb
+# import wandb
 
-wandb.login()
+# wandb.login()
 
 default_config = TRLConfig(
     train=TrainConfig(
@@ -204,37 +205,39 @@ else:
     
 
 
-def prepare_tensor(name: str, input):
-    t = client_util.InferInput(name, input.shape, np_to_triton_dtype(input.dtype))
-    t.set_data_from_numpy(input)
-    return t
+# def prepare_tensor(name: str, input):
+#     t = client_util.InferInput(name, input.shape, np_to_triton_dtype(input.dtype))
+#     t.set_data_from_numpy(input)
+#     return t
 
 
 def create_reward_fn():  # noqa:  C901
     reward_tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-j-6B")
     reward_tokenizer.pad_token = reward_tokenizer.eos_token
     reward_tokenizer.truncation_side = "left"
-    triton_host = os.environ.get("TRITON_HOST")
+    triton_host = False
+    # triton_host = os.environ.get("TRITON_HOST")
 
     if triton_host:
-        triton_url, triton_model = triton_host.split("/")
-        client = client_util.InferenceServerClient(url=triton_url, verbose=False)
+        pass
+        # triton_url, triton_model = triton_host.split("/")
+        # client = client_util.InferenceServerClient(url=triton_url, verbose=False)
 
-        def reward_fn(samples, prompts, outputs):
-            samples = [s + reward_tokenizer.eos_token for s in samples]
-            input = reward_tokenizer(samples, padding=True, max_length=1024)
+        # def reward_fn(samples, prompts, outputs):
+        #     samples = [s + reward_tokenizer.eos_token for s in samples]
+        #     input = reward_tokenizer(samples, padding=True, max_length=1024)
 
-            mbs = 24
-            out = []
-            for i in range(math.ceil(len(samples) / mbs)):
-                batch_ixs = slice(i * mbs, (i + 1) * mbs)
-                input_ids = np.array(input.input_ids[batch_ixs], dtype=np.int32)
+        #     mbs = 24
+        #     out = []
+        #     for i in range(math.ceil(len(samples) / mbs)):
+        #         batch_ixs = slice(i * mbs, (i + 1) * mbs)
+        #         input_ids = np.array(input.input_ids[batch_ixs], dtype=np.int32)
 
-                result = client.infer(triton_model, [prepare_tensor("input_ids", input_ids)])
-                rewards = result.as_numpy("rewards")
-                out.extend(rewards)
+        #         result = client.infer(triton_model, [prepare_tensor("input_ids", input_ids)])
+        #         rewards = result.as_numpy("rewards")
+        #         out.extend(rewards)
 
-            return out
+        #     return out
 
     elif os.environ.get("RANK", "0") == "0":
         
@@ -253,7 +256,7 @@ def create_reward_fn():  # noqa:  C901
                 returns = torch.gather(rewards, 1, ends).squeeze(-1)
                 return returns
 
-        reward_model = RewardModel("EleutherAI/gpt-j-6B", reward_tokenizer.eos_token_id)
+        reward_model = RewardModel("EleutherAI/gpt-j-6B", reward_tokenizer.eos_token_id)  # TODO replace with what Satya trained
         directory = snapshot_download("Dahoas/gptj-rm-static", revision="676bfd4d")
         for fpath in os.listdir(directory):
             if fpath.endswith(".pt") or fpath.endswith(".bin"):
@@ -309,7 +312,7 @@ def main(hparams={}):
 
     tokenizer = AutoTokenizer.from_pretrained(config.tokenizer.tokenizer_path)
     
-    # Change to toxicity
+    # TODO change to toxicity
     dataset = load_dataset("Dahoas/full-hh-rlhf")
     prompts = [{"prompt": x["prompt"], "original_output": x["chosen"]} for x in dataset["train"]]
     eval_prompts = [{"prompt": x["prompt"], "original_output": x["chosen"]} for x in islice(dataset["test"], 35)]
