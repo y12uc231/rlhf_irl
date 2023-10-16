@@ -15,7 +15,7 @@ from torch import nn
 from transformers import AutoModelForCausalLM, AutoTokenizer
 # from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModelForSequenceClassification
 # from tritonclient.utils import np_to_triton_dtype
-
+from sklearn.model_selection import train_test_split
 
 import trlx
 from trlx.data.default_configs import (
@@ -212,96 +212,72 @@ else:
 
 
 def create_reward_fn():  # noqa:  C901
-    reward_tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-j-6B")
+    reward_tokenizer = AutoTokenizer.from_pretrained("skrishna/roberta-hate-speech-dynabench-r4-target")
     reward_tokenizer.pad_token = reward_tokenizer.eos_token
     reward_tokenizer.truncation_side = "left"
-    triton_host = False
-    # triton_host = os.environ.get("TRITON_HOST")
 
-    if triton_host:
-        pass
-        # triton_url, triton_model = triton_host.split("/")
-        # client = client_util.InferenceServerClient(url=triton_url, verbose=False)
-
-        # def reward_fn(samples, prompts, outputs):
-        #     samples = [s + reward_tokenizer.eos_token for s in samples]
-        #     input = reward_tokenizer(samples, padding=True, max_length=1024)
-
-        #     mbs = 24
-        #     out = []
-        #     for i in range(math.ceil(len(samples) / mbs)):
-        #         batch_ixs = slice(i * mbs, (i + 1) * mbs)
-        #         input_ids = np.array(input.input_ids[batch_ixs], dtype=np.int32)
-
-        #         result = client.infer(triton_model, [prepare_tensor("input_ids", input_ids)])
-        #         rewards = result.as_numpy("rewards")
-        #         out.extend(rewards)
-
-        #     return out
-
-    elif os.environ.get("RANK", "0") == "0":
         
-        class RewardModel(nn.Module):
-            def __init__(self, checkpoint_path, eos_token_id):
-                super().__init__()
-                model = AutoModelForCausalLM.from_pretrained(checkpoint_path)
-                self.transformer = model.transformer
-                self.v_head = nn.Linear(model.config.n_embd, 1, bias=False)
-                self.eos_token_id = eos_token_id
+    class RewardModel(nn.Module):
+        def __init__(self, checkpoint_path, eos_token_id):
+            super().__init__()
+            model = AutoModelForCausalLM.from_pretrained(checkpoint_path)
+            self.transformer = model.transformer
+            self.v_head = nn.Linear(model.config.n_embd, 1, bias=False)
+            self.eos_token_id = eos_token_id
 
-            def forward(self, input_ids):
-                states = self.transformer(input_ids)[0]
-                rewards = self.v_head(states).squeeze(-1)
-                ends = torch.argmax((input_ids == self.eos_token_id).float(), dim=1).view(-1, 1)
-                returns = torch.gather(rewards, 1, ends).squeeze(-1)
-                return returns
+        def forward(self, input_ids):
+            states = self.transformer(input_ids)[0]
+            rewards = self.v_head(states).squeeze(-1)
+            ends = torch.argmax((input_ids == self.eos_token_id).float(), dim=1).view(-1, 1)
+            returns = torch.gather(rewards, 1, ends).squeeze(-1)
+            return returns
 
-        reward_model = RewardModel("EleutherAI/gpt-j-6B", reward_tokenizer.eos_token_id)  # TODO replace with what Satya trained
-        directory = snapshot_download("Dahoas/gptj-rm-static", revision="676bfd4d")
-        for fpath in os.listdir(directory):
-            if fpath.endswith(".pt") or fpath.endswith(".bin"):
-                checkpoint = os.path.join(directory, fpath)
-                break
+    # FIXME AttributeError: 'GPTNeoXForCausalLM' object has no attribute 'transformer'
+    reward_model = RewardModel("skrishna/roberta-hate-speech-dynabench-r4-target", reward_tokenizer.eos_token_id)  # TODO replace with skrishna/roberta-hate-speech-dynabench-r4-target
+    # reward_model = RewardModel("EleutherAI/gpt-j-6B", reward_tokenizer.eos_token_id)  # TODO replace with what Satya trained
+    breakpoint()
+    directory = snapshot_download("Dahoas/gptj-rm-static", revision="676bfd4d")  # TODO change?
+    for fpath in os.listdir(directory):
+        if fpath.endswith(".pt") or fpath.endswith(".bin"):
+            checkpoint = os.path.join(directory, fpath)
+            break
 
-        reward_model.load_state_dict(torch.load(checkpoint), strict=False)
-        reward_model.eval()
-        reward_model.requires_grad_(False)
-        reward_device = torch.cuda.device_count() - 1
-        reward_model = reward_model.half().to(reward_device)
-        reward_batch_size = 24
-        delta_reward = True
+    reward_model.load_state_dict(torch.load(checkpoint), strict=False)
+    reward_model.eval()
+    reward_model.requires_grad_(False)
+    reward_device = torch.cuda.device_count() - 1
+    reward_model = reward_model.half().to(reward_device)
+    reward_batch_size = 24
+    delta_reward = True
 
-        def get_reward(samples):
-            input = reward_tokenizer(
-                samples,
-                padding=True,
-                truncation=True,
-                max_length=1024,
-                return_tensors="pt",
-            ).to(reward_device)
+    def get_reward(samples):
+        input = reward_tokenizer(
+            samples,
+            padding=True,
+            truncation=True,
+            max_length=1024,
+            return_tensors="pt",
+        ).to(reward_device)
 
-            mbs = reward_batch_size
-            out = []
-            for i in range(math.ceil(len(samples) / mbs)):
-                batch_ixs = slice(i * mbs, (i + 1) * mbs)
-                input_ids = input.input_ids[batch_ixs]
-                rewards = reward_model(input_ids)
-                out.extend(rewards)
-            return torch.hstack(out)
+        mbs = reward_batch_size
+        out = []
+        for i in range(math.ceil(len(samples) / mbs)):
+            batch_ixs = slice(i * mbs, (i + 1) * mbs)
+            input_ids = input.input_ids[batch_ixs]
+            rewards = reward_model(input_ids)
+            out.extend(rewards)
+        return torch.hstack(out)
 
-        def reward_fn(samples, prompts, original_output, **kwargs):
-            samples = [s + reward_tokenizer.eos_token for s in samples]
-            rewards = get_reward(samples)
+    def reward_fn(samples, prompts, original_output, **kwargs):
+        samples = [s + reward_tokenizer.eos_token for s in samples]
+        rewards = get_reward(samples)
 
-            if not delta_reward:
-                return rewards
+        if not delta_reward:
+            return rewards
 
-            original_samples = [p + o + reward_tokenizer.eos_token for p, o in zip(prompts, original_output)]
-            original_rewards = get_reward(original_samples)
-            return rewards - original_rewards
-
-    else:
-        reward_fn = True
+        original_samples = [p + o + reward_tokenizer.eos_token for p, o in zip(prompts, original_output)]
+        original_rewards = get_reward(original_samples)
+        return rewards - original_rewards
 
     return reward_fn
 
@@ -312,21 +288,21 @@ def main(hparams={}):
 
     tokenizer = AutoTokenizer.from_pretrained(config.tokenizer.tokenizer_path)
     
-    # TODO change to toxicity
-    dataset = load_dataset("Dahoas/full-hh-rlhf")
-    prompts = [{"prompt": x["prompt"], "original_output": x["chosen"]} for x in dataset["train"]]
-    eval_prompts = [{"prompt": x["prompt"], "original_output": x["chosen"]} for x in islice(dataset["test"], 35)]
-
+    # NOTE: changed to toxicity dataset
+    dataset = load_dataset("allenai/real-toxicity-prompts")  # NOTE doesn't have test split; doing it ourselves
+    all_prompts = [{"prompt": x["prompt"], "original_output": x["continuation"]} for x in dataset["train"]]
+    prompts, eval_prompts = train_test_split(all_prompts, test_size=0.2, random_state=0)
+    # eval_prompts = [{"prompt": x["prompt"], "original_output": x["continuation"]} for x in islice(dataset["test"], 35)]  # what is islice doing?
 
     # Change reward model to be facebook/roberta-hate-speech-dynabench-r4-target
-    reward_fn = create_reward_fn()
+    reward_fn = create_reward_fn()  # TODO change to be what Satya trained
 
     trainer, eval_stats = trlx.train(
         prompts=prompts,
         eval_prompts=eval_prompts,
         reward_fn=reward_fn,
         config=config,
-        stop_sequences=["Human:", "human:", "Assistant:", "assistant:"],
+        stop_sequences=["Human:", "human:", "Assistant:", "assistant:"],  # TODO: do these need to change?
     )
     if trainer.accelerator.is_main_process:
         trainer.accelerator.print("\n"*100)
