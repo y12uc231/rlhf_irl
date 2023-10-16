@@ -221,11 +221,10 @@ def create_reward_fn():  # noqa:  C901
             self.eos_token_id = eos_token_id
 
         def forward(self, input_ids):
-            breakpoint()
-            states = self.model(input_ids)[0]  # TODO adjust for Satya model
-            rewards = self.v_head(states).squeeze(-1)  # TODO double check square
-            ends = torch.argmax((input_ids == self.eos_token_id).float(), dim=1).view(-1, 1)  # TODO figure out
-            returns = torch.gather(rewards, 1, ends).squeeze(-1)  # TODO figure out
+            states = self.model(input_ids)[0]
+            rewards = self.v_head(states).squeeze(-1)
+            ends = torch.argmax((input_ids == self.eos_token_id).float(), dim=1).view(-1, 1)
+            returns = torch.gather(rewards, 1, ends).squeeze(-1)
             return returns
 
     reward_model = RewardModel("skrishna/roberta-hate-speech-dynabench-r4-target", reward_tokenizer.eos_token_id)
@@ -243,9 +242,9 @@ def create_reward_fn():  # noqa:  C901
     reward_model.eval()
     reward_model.requires_grad_(False)
     # TODO undo when switching to GPUs
-    # reward_device = torch.cuda.device_count() - 1
-    # reward_model = reward_model.half().to(reward_device)
-    reward_batch_size = 24
+    reward_device = torch.cuda.device_count() - 1
+    reward_model = reward_model.half().to(reward_device)
+    reward_batch_size = 24  # NOTE: this is effectively ignored since the training batch size is 4
     delta_reward = True
 
     def get_reward(samples):
@@ -255,7 +254,7 @@ def create_reward_fn():  # noqa:  C901
             truncation=True,
             max_length=1024,
             return_tensors="pt",
-        )#.to(reward_device)  # TODO uncomment
+        ).to(reward_device)
 
         mbs = reward_batch_size
         out = []
@@ -286,7 +285,8 @@ def main(hparams={}):
 
     # NOTE: changed to toxicity dataset
     dataset = load_dataset("allenai/real-toxicity-prompts")  # NOTE doesn't have test split; doing it ourselves
-    all_prompts = [{"prompt": x["prompt"], "original_output": x["continuation"]} for x in dataset["train"]]
+    all_prompts = [{"prompt": x["prompt"]["text"], "original_output": x["continuation"]["text"]} for x in dataset["train"]]
+    # breakpoint()
     prompts, eval_prompts = train_test_split(all_prompts, test_size=0.2, random_state=0)
     # eval_prompts = [{"prompt": x["prompt"], "original_output": x["continuation"]} for x in islice(dataset["test"], 35)]  # what is islice doing?
 
