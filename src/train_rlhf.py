@@ -28,9 +28,9 @@ from trlx.data.default_configs import (
     TRLConfig,
 )
 
-# import wandb
-
-# wandb.login()
+import wandb
+wandb.login()
+wandb.init(project='test_name')
 
 default_config = TRLConfig(
     train=TrainConfig(
@@ -202,51 +202,49 @@ elif config_name == "12B":
 else:
     raise ValueError(f"Config {config_name} does not exist."
     "Please append this config into the file before calling it")
-    
 
-
-# def prepare_tensor(name: str, input):
-#     t = client_util.InferInput(name, input.shape, np_to_triton_dtype(input.dtype))
-#     t.set_data_from_numpy(input)
-#     return t
 
 
 def create_reward_fn():  # noqa:  C901
     reward_tokenizer = AutoTokenizer.from_pretrained("skrishna/roberta-hate-speech-dynabench-r4-target")
     reward_tokenizer.pad_token = reward_tokenizer.eos_token
-    reward_tokenizer.truncation_side = "left"
+    reward_tokenizer.truncation_side = "left"  # TODO check
 
         
     class RewardModel(nn.Module):
         def __init__(self, checkpoint_path, eos_token_id):
             super().__init__()
             model = AutoModelForCausalLM.from_pretrained(checkpoint_path)
-            self.transformer = model.transformer
-            self.v_head = nn.Linear(model.config.n_embd, 1, bias=False)
+            # self.transformer = model.transformer  # originally used a transformer model, need to change
+            self.model = model
+            self.v_head = nn.Linear(50265, 1, bias=False)  # TODO make not magic number
             self.eos_token_id = eos_token_id
 
         def forward(self, input_ids):
-            states = self.transformer(input_ids)[0]
-            rewards = self.v_head(states).squeeze(-1)
-            ends = torch.argmax((input_ids == self.eos_token_id).float(), dim=1).view(-1, 1)
-            returns = torch.gather(rewards, 1, ends).squeeze(-1)
+            breakpoint()
+            states = self.model(input_ids)[0]  # TODO adjust for Satya model
+            rewards = self.v_head(states).squeeze(-1)  # TODO double check square
+            ends = torch.argmax((input_ids == self.eos_token_id).float(), dim=1).view(-1, 1)  # TODO figure out
+            returns = torch.gather(rewards, 1, ends).squeeze(-1)  # TODO figure out
             return returns
 
-    # FIXME AttributeError: 'GPTNeoXForCausalLM' object has no attribute 'transformer'
-    reward_model = RewardModel("skrishna/roberta-hate-speech-dynabench-r4-target", reward_tokenizer.eos_token_id)  # TODO replace with skrishna/roberta-hate-speech-dynabench-r4-target
-    # reward_model = RewardModel("EleutherAI/gpt-j-6B", reward_tokenizer.eos_token_id)  # TODO replace with what Satya trained
-    breakpoint()
-    directory = snapshot_download("Dahoas/gptj-rm-static", revision="676bfd4d")  # TODO change?
-    for fpath in os.listdir(directory):
-        if fpath.endswith(".pt") or fpath.endswith(".bin"):
-            checkpoint = os.path.join(directory, fpath)
-            break
+    reward_model = RewardModel("skrishna/roberta-hate-speech-dynabench-r4-target", reward_tokenizer.eos_token_id)
 
-    reward_model.load_state_dict(torch.load(checkpoint), strict=False)
+    # Load in the parameters
+    # NOTE check: we don't need this, correct?
+    # directory = snapshot_download("Dahoas/gptj-rm-static", revision="676bfd4d")
+    # for fpath in os.listdir(directory):
+    #     if fpath.endswith(".pt") or fpath.endswith(".bin"):
+    #         checkpoint = os.path.join(directory, fpath)
+    #         break
+    # reward_model.load_state_dict(torch.load(checkpoint), strict=False)
+
+
     reward_model.eval()
     reward_model.requires_grad_(False)
-    reward_device = torch.cuda.device_count() - 1
-    reward_model = reward_model.half().to(reward_device)
+    # TODO undo when switching to GPUs
+    # reward_device = torch.cuda.device_count() - 1
+    # reward_model = reward_model.half().to(reward_device)
     reward_batch_size = 24
     delta_reward = True
 
@@ -257,7 +255,7 @@ def create_reward_fn():  # noqa:  C901
             truncation=True,
             max_length=1024,
             return_tensors="pt",
-        ).to(reward_device)
+        )#.to(reward_device)  # TODO uncomment
 
         mbs = reward_batch_size
         out = []
@@ -286,17 +284,15 @@ def main(hparams={}):
     trlx.logging.set_verbosity(trlx.logging.INFO)
     config = TRLConfig.update(default_config, hparams)
 
-    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer.tokenizer_path)
-    
     # NOTE: changed to toxicity dataset
     dataset = load_dataset("allenai/real-toxicity-prompts")  # NOTE doesn't have test split; doing it ourselves
     all_prompts = [{"prompt": x["prompt"], "original_output": x["continuation"]} for x in dataset["train"]]
     prompts, eval_prompts = train_test_split(all_prompts, test_size=0.2, random_state=0)
     # eval_prompts = [{"prompt": x["prompt"], "original_output": x["continuation"]} for x in islice(dataset["test"], 35)]  # what is islice doing?
 
-    # Change reward model to be facebook/roberta-hate-speech-dynabench-r4-target
-    reward_fn = create_reward_fn()  # TODO change to be what Satya trained
+    reward_fn = create_reward_fn()
 
+    # breakpoint()
     trainer, eval_stats = trlx.train(
         prompts=prompts,
         eval_prompts=eval_prompts,
