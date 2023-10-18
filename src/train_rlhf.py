@@ -29,7 +29,7 @@ from trlx.data.default_configs import (
 )
 
 import wandb
-wandb.login()
+#wandb.login()
 wandb.init(project='test_name')
 
 default_config = TRLConfig(
@@ -37,7 +37,7 @@ default_config = TRLConfig(
         seq_length=1024,
         epochs=10000,
         total_steps=10000,
-        batch_size=4,
+        batch_size=32, #4,
         checkpoint_interval=10000,
         eval_interval=500,
         pipeline="PromptPipeline",
@@ -79,9 +79,9 @@ default_config = TRLConfig(
 config_name = os.environ.get("CONFIG_NAME", "70M")
 if config_name == "70M":
     # Following params from https://wandb.ai/eleutherai/pythia-rlhf/runs/do2vbz2o
-    default_config.train.batch_size = 8
+    default_config.train.batch_size = 32 #8
     default_config.train.seq_length = 1024
-    default_config.train.total_steps = 750
+    default_config.train.total_steps = 1000 #750
     default_config.model.model_path = "lomahony/eleuther-pythia70m-hh-sft"
     default_config.model.num_layers_unfrozen = 4
     default_config.train.checkpoint_dir = "checkpoints/ppo_hh/pythia-70m/"
@@ -261,7 +261,7 @@ def create_reward_fn():  # noqa:  C901
         for i in range(math.ceil(len(samples) / mbs)):
             batch_ixs = slice(i * mbs, (i + 1) * mbs)
             input_ids = input.input_ids[batch_ixs]
-            rewards = reward_model(input_ids)
+            rewards = -reward_model(input_ids)
             out.extend(rewards)
         return torch.hstack(out)
 
@@ -285,7 +285,7 @@ def main(hparams={}):
 
     # NOTE: changed to toxicity dataset
     dataset = load_dataset("allenai/real-toxicity-prompts")  # NOTE doesn't have test split; doing it ourselves
-    all_prompts = [{"prompt": x["prompt"]["text"], "original_output": x["continuation"]["text"]} for x in dataset["train"]]
+    all_prompts = [{"prompt": x["prompt"]["text"], "original_output": x["continuation"]["text"]} for x in dataset["train"] if x['challenging']]
     # breakpoint()
     prompts, eval_prompts = train_test_split(all_prompts, test_size=0.2, random_state=0)
     # eval_prompts = [{"prompt": x["prompt"], "original_output": x["continuation"]} for x in islice(dataset["test"], 35)]  # what is islice doing?
