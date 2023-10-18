@@ -29,7 +29,7 @@ from trlx.data.default_configs import (
 )
 
 import wandb
-#wandb.login()
+wandb.login()
 wandb.init(project='test_name')
 
 default_config = TRLConfig(

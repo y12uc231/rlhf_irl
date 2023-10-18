@@ -1,6 +1,4 @@
 #!/bin/bash
-sbatch <<EOT
-#!/bin/bash
 #SBATCH -c 20        # Number of cores (-c)
 #SBATCH -t 1-00:10     # Runtime in D-HH:MM, minimum of 10 minutes
 #SBATCH -p seas_compute,shared,serial_requeue  # Partition to submit to
