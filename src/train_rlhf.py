@@ -29,7 +29,7 @@ from trlx.data.default_configs import (
 )
 
 import wandb
-wandb.login()
+#wandb.login()
 wandb.init(project='test_name')
 
 default_config = TRLConfig(
@@ -81,7 +81,7 @@ if config_name == "70M":
     # Following params from https://wandb.ai/eleutherai/pythia-rlhf/runs/do2vbz2o
     default_config.train.batch_size = 32 #8
     default_config.train.seq_length = 1024
-    default_config.train.total_steps = 1000 #750
+    default_config.train.total_steps = 750 #750
     default_config.model.model_path = "lomahony/eleuther-pythia70m-hh-sft"
     default_config.model.num_layers_unfrozen = 4
     default_config.train.checkpoint_dir = "checkpoints/ppo_hh/pythia-70m/"
@@ -293,7 +293,7 @@ def main(hparams={}):
     reward_fn = create_reward_fn()
 
     # breakpoint()
-    trainer, eval_stats = trlx.train(
+    trainer = trlx.train(
         prompts=prompts,
         eval_prompts=eval_prompts,
         reward_fn=reward_fn,
@@ -302,7 +302,6 @@ def main(hparams={}):
     )
     if trainer.accelerator.is_main_process:
         trainer.accelerator.print("\n"*100)
-        trainer.accelerator.print(eval_stats["reward/mean"])
 
 if __name__ == "__main__":
     hparams = {} if len(sys.argv) == 1 else json.loads(sys.argv[1])
